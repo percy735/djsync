@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<title>DJ SYNC</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=DM+Mono&display=swap');
+:root{--bg:#050508;--c1:#00ffe1;--c2:#ff2d6b;--c3:#ffe533;--muted:rgba(255,255,255,0.3);--dim:rgba(255,255,255,0.06);}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{width:100%;height:100%;background:#000;color:#e0e0f0;font-family:'DM Mono',monospace;overflow:hidden;}
+
+/* All screens stacked, video always behind */
+.screen{display:none;width:100%;height:100vh;flex-direction:column;align-items:center;justify-content:center;padding:24px;}
+.screen.active{display:flex;}
+
+/* ── VIDEO always visible when playing ── */
+#video-layer{
+  position:fixed;inset:0;z-index:1;background:#000;
+  display:none;
+}
+#video-layer.playing{display:block;}
+#yt-player{width:100%;height:100%;border:none;}
+
+/* ── UI always on top of video ── */
+#ui-layer{position:fixed;inset:0;z-index:10;pointer-events:none;}
+
+/* Video HUD — top bar over video */
+#video-hud{
+  position:absolute;top:0;left:0;right:0;
+  padding:14px 18px;
+  background:linear-gradient(to bottom,rgba(0,0,0,0.85),transparent);
+  display:flex;justify-content:space-between;align-items:flex-start;
+  opacity:0;transition:opacity 0.6s;
+  pointer-events:none;
+}
+#video-hud.show{opacity:1;}
+.vhud-now{font-size:.5rem;letter-spacing:3px;color:var(--c1);margin-bottom:3px;}
+.vhud-title{font-family:'Orbitron',sans-serif;font-size:clamp(.9rem,3vw,1.5rem);color:#fff;letter-spacing:2px;max-width:65vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.vhud-artist{font-size:.65rem;color:var(--c1);letter-spacing:2px;margin-top:2px;}
+.vhud-timer-num{font-family:'Orbitron',sans-serif;font-size:1.8rem;color:rgba(0,255,225,0.4);line-height:1;text-align:right;}
+.vhud-timer-label{font-size:.45rem;letter-spacing:2px;color:var(--muted);text-align:right;}
+
+/* Scan indicator — small pill bottom right, shown during background scan */
+#scan-indicator{
+  position:absolute;bottom:20px;right:20px;
+  background:rgba(0,0,0,0.7);border:1px solid var(--c1);
+  color:var(--c1);font-size:.55rem;letter-spacing:3px;
+  padding:6px 14px;opacity:0;transition:opacity 0.4s;
+  pointer-events:none;
+}
+#scan-indicator.show{opacity:1;}
+
+/* Song change flash — brief overlay when new song detected */
+#song-flash{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:rgba(0,0,0,0.7);
+  opacity:0;transition:opacity 0.4s;
+  pointer-events:none;gap:10px;
+}
+#song-flash.show{opacity:1;}
+.flash-check{font-size:2.5rem;color:var(--c1);}
+.flash-title{font-family:'Orbitron',sans-serif;font-size:clamp(1.2rem,5vw,2.5rem);color:#fff;letter-spacing:2px;text-align:center;max-width:85vw;}
+.flash-artist{font-size:clamp(.8rem,2vw,1rem);color:var(--c1);letter-spacing:4px;}
+
+/* ── SETUP ── */
+#screen-setup{background:radial-gradient(ellipse at top,#0a0a1a 0%,#000 70%);z-index:20;pointer-events:all;}
+.logo{font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(2.5rem,10vw,4rem);letter-spacing:8px;color:var(--c1);text-shadow:0 0 40px rgba(0,255,225,.5);text-align:center;margin-bottom:6px;}
+.logo-sub{font-size:.6rem;letter-spacing:4px;color:var(--muted);text-align:center;margin-bottom:32px;}
+.card{width:100%;max-width:480px;background:rgba(255,255,255,0.03);border:1px solid rgba(0,255,225,0.1);padding:22px;margin-bottom:14px;}
+.card-title{font-size:.55rem;letter-spacing:4px;color:var(--c1);margin-bottom:14px;text-transform:uppercase;}
+.field{margin-bottom:14px;}
+.field label{display:block;font-size:.55rem;letter-spacing:3px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;}
+.slider-wrap{display:flex;align-items:center;gap:12px;}
+.slider-wrap input[type=range]{flex:1;accent-color:var(--c1);}
+.slider-num{font-family:'Orbitron',sans-serif;font-size:1rem;color:var(--c1);min-width:40px;text-align:right;}
+.btn{width:100%;max-width:480px;padding:16px;background:transparent;border:2px solid var(--c1);color:var(--c1);font-family:'Orbitron',sans-serif;font-size:.9rem;font-weight:700;letter-spacing:5px;cursor:pointer;position:relative;overflow:hidden;transition:color .3s;margin-top:8px;pointer-events:all;}
+.btn::before{content:'';position:absolute;inset:0;background:var(--c1);transform:translateX(-101%);transition:transform .3s;z-index:0;}
+.btn:active::before{transform:translateX(0);}
+.btn:active{color:#000;}
+.btn span{position:relative;z-index:1;}
+.btn.sec{border-color:rgba(255,255,255,0.1);color:var(--muted);font-size:.7rem;}
+
+/* ── PAIR ── */
+#screen-pair{background:#000;gap:18px;z-index:20;pointer-events:all;}
+.pair-title{font-family:'Orbitron',sans-serif;font-weight:700;font-size:clamp(1.2rem,5vw,1.8rem);letter-spacing:4px;color:var(--c1);text-align:center;}
+.pair-steps{max-width:420px;width:100%;background:rgba(255,255,255,0.03);border:1px solid var(--dim);padding:18px;}
+.step{display:flex;gap:14px;margin-bottom:14px;align-items:flex-start;}
+.step:last-child{margin-bottom:0;}
+.step-num{font-family:'Orbitron',sans-serif;font-size:1.2rem;color:var(--c1);min-width:26px;}
+.step-txt{font-size:.72rem;line-height:1.8;color:var(--muted);}
+.step-txt strong{color:#fff;}
+.field input{width:100%;background:rgba(0,255,225,0.04);border:1px solid rgba(0,255,225,0.15);color:var(--c1);font-family:'DM Mono',monospace;font-size:.78rem;padding:10px 12px;outline:none;transition:border-color .2s;}
+.field input:focus{border-color:var(--c1);}
+
+/* ── LISTEN (shown when no video playing) ── */
+#screen-listen{background:radial-gradient(ellipse at center,#080812 0%,#000 70%);gap:20px;position:relative;overflow:hidden;z-index:15;pointer-events:all;}
+#screen-listen::before{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(0,255,225,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,225,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;}
+.listen-logo{font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(2.5rem,12vw,7rem);letter-spacing:8px;color:var(--c1);animation:glow 2.5s ease-in-out infinite;text-align:center;position:relative;}
+@keyframes glow{0%,100%{text-shadow:0 0 30px rgba(0,255,225,.3);}50%{text-shadow:0 0 80px rgba(0,255,225,.8),0 0 120px rgba(0,255,225,.2);}}
+.bars{display:flex;align-items:flex-end;gap:3px;height:60px;}
+.bar{width:5px;border-radius:3px;background:var(--c1);opacity:.4;}
+.listen-status{font-size:.65rem;letter-spacing:4px;color:var(--muted);text-align:center;}
+.last-song{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(0,255,225,0.05);border:1px solid rgba(0,255,225,0.15);padding:10px 20px;text-align:center;width:90%;max-width:400px;}
+.last-song-label{font-size:.5rem;letter-spacing:3px;color:var(--muted);}
+.last-song-title{font-family:'Orbitron',sans-serif;font-size:.85rem;color:var(--c1);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.countdown{font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(5rem,22vw,10rem);color:rgba(0,255,225,0.06);position:absolute;bottom:0;left:0;right:0;text-align:center;pointer-events:none;letter-spacing:4px;}
+.settings-btn{position:fixed;top:14px;right:14px;background:rgba(0,0,0,0.5);border:1px solid var(--dim);color:var(--muted);font-size:.6rem;letter-spacing:2px;padding:6px 12px;cursor:pointer;z-index:100;font-family:'DM Mono',monospace;pointer-events:all;}
+
+/* TOAST */
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:rgba(0,0,0,.95);border:1px solid var(--c1);color:var(--c1);font-size:.65rem;letter-spacing:2px;padding:10px 24px;opacity:0;transition:all .3s;z-index:9999;white-space:nowrap;pointer-events:none;max-width:90vw;text-align:center;}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+#toast.err{border-color:var(--c2);color:var(--c2);}
+#toast.warn{border-color:var(--c3);color:var(--c3);}
+</style>
+</head>
+<body>
+
+<!-- VIDEO LAYER — always behind everything -->
+<div id="video-layer">
+  <iframe id="yt-player" allowfullscreen allow="autoplay; encrypted-media; fullscreen"></iframe>
+</div>
+
+<!-- UI LAYER — overlays on video -->
+<div id="ui-layer">
+  <!-- HUD: song info + next scan timer -->
+  <div id="video-hud">
+    <div>
+      <div class="vhud-now">● SONANDO AHORA</div>
+      <div class="vhud-title" id="vhud-title">—</div>
+      <div class="vhud-artist" id="vhud-artist">—</div>
+    </div>
+    <div>
+      <div class="vhud-timer-num" id="vhud-timer">—</div>
+      <div class="vhud-timer-label">PRÓXIMO SCAN</div>
+    </div>
+  </div>
+
+  <!-- Small scan indicator — shown during background scan -->
+  <div id="scan-indicator">⟳ ESCANEANDO...</div>
+
+  <!-- Song change flash — briefly shown when new song found -->
+  <div id="song-flash">
+    <div class="flash-check">✓</div>
+    <div class="flash-title" id="flash-title">—</div>
+    <div class="flash-artist" id="flash-artist">—</div>
+  </div>
+</div>
+
+<!-- SETUP -->
+<div id="screen-setup" class="screen active">
+  <div class="logo">DJ SYNC</div>
+  <div class="logo-sub">VISUALES AUTOMÁTICOS PARA BARES</div>
+  <div class="card">
+    <div class="card-title">⚙ Configuración</div>
+    <div class="field">
+      <label>Escanear cada (segundos)</label>
+      <div class="slider-wrap">
+        <input type="range" id="scan-interval" min="10" max="60" value="15" step="5"
+          oninput="document.getElementById('siv').textContent=this.value">
+        <div class="slider-num"><span id="siv">15</span>s</div>
+      </div>
+    </div>
+    <div class="field">
+      <label>Mostrar video durante (segundos)</label>
+      <div class="slider-wrap">
+        <input type="range" id="vid-duration" min="30" max="180" value="60" step="15"
+          oninput="document.getElementById('vdv').textContent=this.value">
+        <div class="slider-num"><span id="vdv">60</span>s</div>
+      </div>
+    </div>
+  </div>
+  <button class="btn" onclick="startApp()"><span>▶ &nbsp; INICIAR</span></button>
+</div>
+
+<!-- PAIR -->
+<div id="screen-pair" class="screen">
+  <div class="pair-title">CONECTAR AL TV</div>
+  <div class="pair-steps">
+    <div class="step"><div class="step-num">1</div><div class="step-txt">En el TV abre <strong>YouTube</strong></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-txt">Ve a <strong>Ajustes → Vincular con código TV</strong></div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-txt">Escribe el código que aparece en el TV</div></div>
+  </div>
+  <div class="field" style="width:100%;max-width:420px;margin-top:8px;">
+    <label>Código del TV</label>
+    <input id="tv-code" type="tel" placeholder="038 564 505 762" style="font-size:1.1rem;letter-spacing:4px;text-align:center;">
+  </div>
+  <button class="btn" onclick="pairAndStart()"><span>📺 VINCULAR Y EMPEZAR</span></button>
+  <button class="btn sec" onclick="skipPair()"><span>SALTAR — solo probar</span></button>
+</div>
+
+<!-- LISTEN — shown only when no video playing -->
+<div id="screen-listen" class="screen">
+  <button class="settings-btn" onclick="showSetup()">⚙</button>
+  <div class="listen-logo">DJ SYNC</div>
+  <div class="bars" id="bars"></div>
+  <div class="listen-status" id="listen-status">ESCUCHANDO AMBIENTE...</div>
+  <div class="last-song" id="last-song" style="display:none;">
+    <div class="last-song-label">ÚLTIMA CANCIÓN</div>
+    <div class="last-song-title" id="last-song-title">—</div>
+  </div>
+  <div class="countdown" id="countdown">—</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const CFG={
+  acrHost:'identify-us-west-2.acrcloud.com',
+  acrKey:'b1723d15c8437cec4d27d41aaccd469e',
+  acrSecret:'DCkpN9bQ1OD8Utd2TRiYaVVPamWyhFDchcdcW7JE',
+  ytKey:'AIzaSyC-FH2-T-z6IU40cB3P70qisbtIqw-MRUw',
+  interval:15,
+  vidTime:60,
+};
+
+let audioStream=null,audioCtx=null,analyser=null;
+let countTimer=null,vidTimer=null,hudTimer=null;
+let lastSong='',isVideoPlaying=false,isScanning=false,animGoing=false;
+
+// ── SCREENS ──
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  const el=document.getElementById('screen-'+id);
+  if(el)el.classList.add('active');
+}
+function showSetup(){
+  isVideoPlaying=false;
+  clearInterval(countTimer);clearInterval(vidTimer);
+  document.getElementById('video-layer').classList.remove('playing');
+  document.getElementById('yt-player').src='about:blank';
+  hideVideoUI();
+  showScreen('setup');
+}
+
+// ── START ──
+function startApp(){
+  CFG.interval=parseInt(document.getElementById('scan-interval').value);
+  CFG.vidTime=parseInt(document.getElementById('vid-duration').value);
+  showScreen('pair');
+}
+
+// ── PAIR ──
+async function pairAndStart(){
+  await initMic();
+  showScreen('listen');
+  buildBars();
+  startCycle();
+}
+async function skipPair(){
+  await initMic();
+  showScreen('listen');
+  buildBars();
+  startCycle();
+}
+
+// ── MIC ──
+async function initMic(){
+  try{
+    audioStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,sampleRate:44100}});
+    audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+    analyser=audioCtx.createAnalyser();analyser.fftSize=256;
+    audioCtx.createMediaStreamSource(audioStream).connect(analyser);
+    toast('🎤 Micrófono activo');
+  }catch(e){toast('Sin micrófono — modo demo','warn');}
+}
+
+// ── BARS ──
+function buildBars(){
+  const w=document.getElementById('bars');w.innerHTML='';
+  for(let i=0;i<32;i++){const b=document.createElement('div');b.className='bar';b.style.height='6px';w.appendChild(b);}
+  if(!animGoing){animGoing=true;animLoop();}
+}
+function animLoop(){
+  const bars=document.querySelectorAll('.bar');
+  if(analyser&&bars.length){
+    const d=new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(d);
+    bars.forEach((b,i)=>{const v=d[Math.floor(i*d.length/bars.length)];b.style.height=(5+(v/255)*55)+'px';b.style.opacity=0.2+(v/255)*0.8;});
+  }else{bars.forEach(b=>{b.style.height=(5+Math.random()*40)+'px';});}
+  requestAnimationFrame(animLoop);
+}
+
+// ── COUNTDOWN (shown on listen screen only) ──
+function startCycle(){
+  clearInterval(countTimer);
+  let secs=CFG.interval;
+  if(!isVideoPlaying){
+    document.getElementById('countdown').textContent=secs;
+    document.getElementById('listen-status').textContent='ESCUCHANDO AMBIENTE...';
+  }
+  countTimer=setInterval(()=>{
+    secs--;
+    if(!isVideoPlaying)document.getElementById('countdown').textContent=secs;
+    else{
+      // Show small indicator on video
+      document.getElementById('vhud-timer').textContent=secs<=CFG.interval?'':'';
+    }
+    if(secs<=0){clearInterval(countTimer);doScan();}
+  },1000);
+}
+
+// ── SCAN (runs in background — never interrupts video) ──
+let gainNode=null;
+
+async function doScan(){
+  if(isScanning)return;
+  isScanning=true;
+
+  if(isVideoPlaying){
+    document.getElementById('scan-indicator').classList.add('show');
+  }else{
+    showScreen('listen');
+    document.getElementById('listen-status').textContent='IDENTIFICANDO...';
+  }
+
+  try{
+    let title,artist,ytId;
+    if(audioStream){
+      const r=await recordAndRecognize();
+      title=r.title;artist=r.artist;
+      ytId=r.ytVideoId?[r.ytVideoId]:null;
+    }else{
+      const d=demoSong();title=d.title;artist=d.artist;await sleep(2000);
+    }
+
+    document.getElementById('scan-indicator').classList.remove('show');
+
+    const key=artist+'__'+title;
+    if(key===lastSong){
+      // ★ Same song — do NOTHING, video keeps playing from where it was
+      isScanning=false;
+      if(!isVideoPlaying)document.getElementById('listen-status').textContent='ESCUCHANDO AMBIENTE...';
+      startCycle();
+      return;
+    }
+    lastSong=key;
+
+    if(!ytId)ytId=await searchYT(title,artist);
+    if(!ytId||!ytId.length){
+      // No video found — keep current video untouched
+      isScanning=false;
+      startCycle();
+      return;
+    }
+    await playVideo(ytId,title,artist);
+
+  }catch(e){
+    document.getElementById('scan-indicator').classList.remove('show');
+    if(!isVideoPlaying){
+      document.getElementById('listen-status').textContent='ESCUCHANDO AMBIENTE...';
+    }
+  }
+
+  isScanning=false;
+  startCycle();
+}
+
+// ── PLAY VIDEO (seamless, no screen change) ──
+async function playVideo(videoIds,title,artist){
+  if(!Array.isArray(videoIds))videoIds=[videoIds];
+
+  // ★ Check embeddability FIRST without touching the iframe
+  let validId=null;
+  for(const vid of videoIds){
+    const ok=await checkEmbeddable(vid);
+    if(ok){validId=vid;break;}
+  }
+
+  // ★ No valid video — keep current video playing, don't go black
+  if(!validId){
+    toast('Sin video embebible — continuando con el actual','warn');
+    return;
+  }
+
+  // ★ Always muted — this is a visual-only system, audio comes from DJ
+  frame.src=`https://www.youtube.com/embed/${validId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+
+  document.getElementById('last-song-title').textContent=artist+' — '+title;
+  document.getElementById('last-song').style.display='block';
+  document.getElementById('video-layer').classList.add('playing');
+  isVideoPlaying=true;
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+
+  document.getElementById('vhud-title').textContent=title;
+  document.getElementById('vhud-artist').textContent=artist;
+  showHUD();
+
+  document.getElementById('flash-title').textContent=title;
+  document.getElementById('flash-artist').textContent=artist;
+  const flash=document.getElementById('song-flash');
+  flash.classList.add('show');
+  await sleep(2000);
+  flash.classList.remove('show');
+
+  toast('▶ '+artist+' — '+title);
+}
+
+// Check if a YouTube video allows embedding (without loading it)
+async function checkEmbeddable(videoId){
+  try{
+    const r=await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+    return r.ok;
+  }catch(e){return false;}
+}
+
+// ── HUD ──
+function showHUD(){
+  const hud=document.getElementById('video-hud');
+  hud.classList.add('show');
+  clearTimeout(hudTimer);
+  hudTimer=setTimeout(()=>hud.classList.remove('show'),5000);
+}
+
+function hideVideoUI(){
+  document.getElementById('video-hud').classList.remove('show');
+  document.getElementById('song-flash').classList.remove('show');
+  document.getElementById('scan-indicator').classList.remove('show');
+}
+
+// Tap video area to show HUD
+document.getElementById('video-layer').addEventListener('click',showHUD);
+
+// ── ACRCLOUD ──
+async function recordAndRecognize(){
+  const chunks=[];
+  const mime=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'].find(m=>MediaRecorder.isTypeSupported(m))||'';
+  const rec=new MediaRecorder(audioStream,mime?{mimeType:mime}:{});
+  rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+  rec.start();await sleep(8000);rec.stop();
+  await new Promise(r=>rec.onstop=r);
+  const blob=new Blob(chunks,{type:rec.mimeType||'audio/webm'});
+  const ts=Math.floor(Date.now()/1000);
+  const str=`POST\n/v1/identify\n${CFG.acrKey}\naudio\n1\n${ts}`;
+  const enc=new TextEncoder();
+  const ck=await crypto.subtle.importKey('raw',enc.encode(CFG.acrSecret),{name:'HMAC',hash:'SHA-1'},false,['sign']);
+  const sig=btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign('HMAC',ck,enc.encode(str)))));
+  const form=new FormData();
+  form.append('sample',blob,'audio.webm');
+  form.append('access_key',CFG.acrKey);
+  form.append('data_type','audio');
+  form.append('signature_version','1');
+  form.append('signature',sig);
+  form.append('sample_bytes',blob.size);
+  form.append('timestamp',ts);
+  const res=await fetch(`https://${CFG.acrHost}/v1/identify`,{method:'POST',body:form});
+  const data=await res.json();
+  if(data.status?.code===0&&data.metadata?.music?.length){
+    const t=data.metadata.music[0];
+    return{title:t.title,artist:t.artists?.[0]?.name||'Artista desconocido',ytVideoId:t.external_metadata?.youtube?.vid||null};
+  }
+  throw new Error('No reconocido');
+}
+
+// ── YOUTUBE ──
+async function searchYT(title,artist){
+  const q=encodeURIComponent(`${artist} ${title} official video`);
+  const data=await(await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q}&type=video&videoCategoryId=10&maxResults=8&key=${CFG.ytKey}`)).json();
+  if(!data.items?.length)return null;
+  // Return top 5 ranked IDs to try in order
+  return data.items
+    .map(i=>({id:i.id.videoId,s:scoreVid(i.snippet.title+' '+i.snippet.channelTitle,title,artist)}))
+    .sort((a,b)=>b.s-a.s)
+    .slice(0,5)
+    .map(i=>i.id);
+}
+function scoreVid(txt,title,artist){
+  const s=txt.toLowerCase();let p=0;
+  if(s.includes(title.toLowerCase()))p+=3;if(s.includes(artist.toLowerCase()))p+=3;
+  if(s.includes('official'))p+=2;if(s.includes('vevo'))p+=2;if(s.includes('video'))p+=1;
+  if(s.includes('lyrics'))p-=1;if(s.includes('cover'))p-=2;if(s.includes('karaoke'))p-=3;
+  return p;
+}
+
+// ── DEMO ──
+const DEMOS=[{title:'Whenever Wherever',artist:'Shakira'},{title:'Blinding Lights',artist:'The Weeknd'},{title:'Bad Guy',artist:'Billie Eilish'},{title:'Flowers',artist:'Miley Cyrus'},{title:'Levitating',artist:'Dua Lipa'}];
+let dI=0;function demoSong(){return DEMOS[dI++%DEMOS.length];}
+
+// ── TOAST ──
+let toastT;
+function toast(msg,type=''){const el=document.getElementById('toast');el.textContent=msg;el.className='show '+type;clearTimeout(toastT);toastT=setTimeout(()=>el.className='',3500);}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+</script>
+</body>
+</html>
