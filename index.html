@@ -113,6 +113,9 @@ html,body{width:100%;height:100%;background:#000;color:#e0e0f0;font-family:'DM M
         <div class="slider-num"><span id="siv">20</span>s</div>
       </div>
     </div>
+    <div style="font-size:.58rem;color:var(--muted);line-height:1.8;margin-top:4px;">
+      El video se mantiene hasta que cambie la canción.
+    </div>
   </div>
   <button class="btn" onclick="startApp()"><span>▶ &nbsp; INICIAR</span></button>
 </div>
@@ -255,7 +258,8 @@ async function doScan(){
     document.getElementById('scan-indicator').classList.remove('show');
     const key=`${artist}__${title}`;
     if(key===lastSong){
-      log('Misma canción — sin cambios');
+      // ★ Misma canción — no tocar el video, seguir escuchando
+      log('Misma canción — video sin cambios');
       isScanning=false;
       startCycle();
       return;
