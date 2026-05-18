@@ -235,7 +235,7 @@ async function doScan(){
       title=result.title;
       artist=result.artist;
       ytId=result.ytVideoId?[result.ytVideoId]:null;
-      log(`ACRCloud: "${title}" — ${artist}`,'ok');
+      log(`ACRCloud: "${title}" — ${artist} | YT ID: ${result.ytVideoId||'ninguno'}`,'ok');
     }else{
       // Demo mode
       const demos=[{title:'Blinding Lights',artist:'The Weeknd'},{title:'Flowers',artist:'Miley Cyrus'},{title:'Levitating',artist:'Dua Lipa'}];
@@ -328,17 +328,19 @@ async function recordAndRecognize(){
 
 // ── YOUTUBE SEARCH — prioriza canales oficiales ──
 async function searchYT(title,artist){
-  // Usar título completo para máxima precisión
-  const fullQ=encodeURIComponent(`${artist} ${title}`);
-  const officialQ=encodeURIComponent(`${artist} ${title} official`);
-  const vevoQ=encodeURIComponent(`${artist}VEVO ${title}`);
+  // ★ Búsqueda 1: título exacto entre comillas — máxima precisión
+  const q1=encodeURIComponent(`"${title}" ${artist}`);
+  // Búsqueda 2: artista + título oficial
+  const q2=encodeURIComponent(`${artist} ${title} official`);
+  // Búsqueda 3: VEVO específico
+  const q3=encodeURIComponent(`${artist}VEVO "${title}"`);
 
   const base=`https://www.googleapis.com/youtube/v3/search?type=video&videoCategoryId=10&key=${CFG.ytKey}`;
 
   const [r1,r2,r3]=await Promise.all([
-    fetch(`${base}&part=snippet&q=${fullQ}&maxResults=5&order=relevance`).then(r=>r.json()),
-    fetch(`${base}&part=snippet&q=${officialQ}&maxResults=5&order=viewCount`).then(r=>r.json()),
-    fetch(`${base}&part=snippet&q=${vevoQ}&maxResults=3&order=relevance`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${q1}&maxResults=5&order=relevance`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${q2}&maxResults=5&order=relevance`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${q3}&maxResults=3&order=relevance`).then(r=>r.json()),
   ]);
 
   const items=[...(r1.items||[]),...(r2.items||[]),...(r3.items||[])];
@@ -355,10 +357,12 @@ async function searchYT(title,artist){
 
   const scored=unique.map(i=>({
     id:i.id.videoId,
+    title:i.snippet.title,
+    ch:i.snippet.channelTitle,
     s:scoreVid(i.snippet.title,i.snippet.channelTitle,title,artist)
   })).sort((a,b)=>b.s-a.s);
 
-  log(`Mejor: score ${scored[0]?.s} — ${scored[0]?.id}`);
+  scored.slice(0,3).forEach(v=>log(`  [${v.s}] ${v.ch} — ${v.title.substring(0,40)}`));
   return scored.slice(0,6).map(i=>i.id);
 }
 
@@ -369,16 +373,23 @@ function scoreVid(snippetTitle,channelTitle,title,artist){
   const a=artist.toLowerCase();
   let p=0;
 
-  // ★ MÁXIMA PRIORIDAD: título exacto completo en el video
+  // ★ DESCALIFICACIÓN INMEDIATA — canales de compilación/spam
+  const spamChannels=['viral','hits','sounds','mix','playlist','top','best of','shorts','tiktok','reels','musicflix','musicfix','tema','recopilacion'];
+  if(spamChannels.some(s=>ch.includes(s))) return -999;
+
+  // ★ DESCALIFICACIÓN INMEDIATA — títulos de compilación
+  const spamTitles=['best of','viral hits','top songs','playlist','compilation','#short','shorts'];
+  if(spamTitles.some(s=>st.includes(s))) return -999;
+
+  // ★ Título exacto completo
   if(st.includes(t))                          p+=15;
-  else {
-    // Verificar palabras clave del título — especialmente números de volumen
+  else{
     const titleWords=t.split(/\s+/).filter(w=>w.length>2);
-    const matchedWords=titleWords.filter(w=>st.includes(w));
-    const matchRatio=matchedWords.length/titleWords.length;
-    if(matchRatio>=0.8)      p+=8;
-    else if(matchRatio>=0.5) p+=2;
-    else                     p-=10; // Título muy diferente — penalizar fuerte
+    const matched=titleWords.filter(w=>st.includes(w));
+    const ratio=matched.length/titleWords.length;
+    if(ratio>=0.8)      p+=8;
+    else if(ratio>=0.5) p+=2;
+    else                p-=15;
   }
 
   // ★ Canales oficiales
@@ -398,11 +409,10 @@ function scoreVid(snippetTitle,channelTitle,title,artist){
   if(st.includes('official'))                 p+=2;
   if(st.includes('vevo'))                     p+=3;
 
-  // ★ Penalizaciones
+  // Penalizaciones
   if(st.includes('cover'))                    p-=10;
   if(st.includes('karaoke'))                  p-=10;
   if(st.includes('reaction'))                 p-=10;
-  if(st.includes('tutorial'))                 p-=10;
   if(st.includes('lyrics')&&!st.includes('official')) p-=3;
   if(st.includes('remix')&&!ch.includes(a))  p-=5;
   if(st.includes('live')&&!st.includes('official'))   p-=4;
