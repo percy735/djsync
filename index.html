@@ -358,11 +358,43 @@ function scoreVid(txt,title,artist){
 }
 
 // ── CHECK EMBEDDABLE ──
-async function checkEmbeddable(videoId){
-  try{
-    const r=await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
-    return r.ok;
-  }catch(e){return false;}
+// ── TEST VIDEO IN HIDDEN IFRAME ──
+let testFrame=null;
+function getTestFrame(){
+  if(!testFrame){
+    testFrame=document.createElement('iframe');
+    testFrame.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;';
+    testFrame.allow='autoplay';
+    document.body.appendChild(testFrame);
+  }
+  return testFrame;
+}
+
+function checkEmbeddable(videoId){
+  return new Promise(resolve=>{
+    const f=getTestFrame();
+    let resolved=false;
+    const done=(val)=>{
+      if(resolved)return;
+      resolved=true;
+      clearTimeout(timer);
+      window.removeEventListener('message',handler);
+      resolve(val);
+    };
+    // If no error message in 3s → assume OK
+    const timer=setTimeout(()=>done(true),3000);
+    const handler=(e)=>{
+      try{
+        const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
+        // YouTube error codes 100-150 = video unavailable/blocked
+        if(d?.event==='onError'||(typeof d?.info==='number'&&d.info>=100&&d.info<=150)){
+          done(false);
+        }
+      }catch(ex){}
+    };
+    window.addEventListener('message',handler);
+    f.src=`https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  });
 }
 
 // ── PLAY VIDEO ──
@@ -370,11 +402,13 @@ async function playVideo(videoIds,title,artist){
   if(!Array.isArray(videoIds))videoIds=[videoIds];
   let validId=null;
   for(const vid of videoIds){
-    log('Verificando: '+vid);
+    log('Probando: '+vid);
     const ok=await checkEmbeddable(vid);
-    if(ok){validId=vid;log('✓ Video embebible: '+vid);break;}
+    if(ok){validId=vid;log('✓ OK: '+vid);break;}
     else log('✗ Bloqueado: '+vid);
   }
+
+  if(testFrame)testFrame.src='about:blank';
 
   if(!validId){
     log('Ningún video disponible — manteniendo actual','warn');
@@ -382,8 +416,24 @@ async function playVideo(videoIds,title,artist){
   }
 
   const frame=document.getElementById('yt-player');
-  // ★ Always muted — visual only system
-  frame.src=`https://www.youtube.com/embed/${validId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&playsinline=1`;
+  frame.src=`https://www.youtube.com/embed/${validId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+
+  // Watch for errors on main player — auto skip if blocked after load
+  const remaining=videoIds.slice(videoIds.indexOf(validId)+1);
+  if(remaining.length>0){
+    const errHandler=(e)=>{
+      try{
+        const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
+        if(d?.event==='onError'||(typeof d?.info==='number'&&d.info>=100&&d.info<=150)){
+          window.removeEventListener('message',errHandler);
+          log('Error en reproducción — intentando siguiente','warn');
+          playVideo(remaining,title,artist);
+        }
+      }catch(ex){}
+    };
+    window.addEventListener('message',errHandler);
+    setTimeout(()=>window.removeEventListener('message',errHandler),15000);
+  }
 
   document.getElementById('last-song-title').textContent=`${artist} — ${title}`;
   document.getElementById('last-song').style.display='block';
@@ -394,20 +444,18 @@ async function playVideo(videoIds,title,artist){
   document.getElementById('vhud-title').textContent=title;
   document.getElementById('vhud-artist').textContent=artist;
 
-  // Show HUD
   const hud=document.getElementById('video-hud');
   hud.classList.add('show');
   clearTimeout(hudTimer);
   hudTimer=setTimeout(()=>hud.classList.remove('show'),5000);
 
-  // Flash
   document.getElementById('flash-title').textContent=title;
   document.getElementById('flash-artist').textContent=artist;
   const flash=document.getElementById('song-flash');
   flash.classList.add('show');
   setTimeout(()=>flash.classList.remove('show'),2500);
 
-  log(`▶ Reproduciendo: ${artist} — ${title}`,'ok');
+  log(`▶ ${artist} — ${title}`,'ok');
 }
 
 // Tap to show HUD
