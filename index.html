@@ -102,7 +102,7 @@ html,body{width:100%;height:100%;background:#000;color:#e0e0f0;font-family:'DM M
 <!-- SETUP -->
 <div id="screen-setup" class="screen active">
   <div class="logo">DJ SYNC</div>
-  <div class="logo-sub">VISUALES AUTOMÁTICOS PARA BARES · v2.5</div>
+  <div class="logo-sub">VISUALES AUTOMÁTICOS PARA BARES · v3.0</div>
   <div class="card">
     <div class="card-title">⚙ Configuración</div>
     <div class="field">
@@ -122,7 +122,7 @@ html,body{width:100%;height:100%;background:#000;color:#e0e0f0;font-family:'DM M
 
 <!-- LISTEN -->
 <div id="screen-listen" class="screen">
-  <button class="settings-btn" onclick="showScreen('setup')">⚙ v2.5</button>
+  <button class="settings-btn" onclick="showScreen('setup')">⚙ v3.0</button>
   <div class="listen-logo">DJ SYNC</div>
   <div class="bars" id="bars"></div>
   <div class="listen-status" id="listen-status">ESCUCHANDO AMBIENTE...</div>
@@ -477,82 +477,87 @@ function scoreVid(snippetTitle,channelTitle,title,artist,officialChannelId,video
 
 // ── CHECK EMBEDDABLE ──
 // ── PLAY VIDEO con fallback automático ──
-let currentVideoIds=[];
+// ── PLAY VIDEO — verifica en silencio, muestra solo el ganador ──
 let currentTitle='';
 let currentArtist='';
-let currentIdIndex=0;
 let videoCheckTimer=null;
+
+// Iframe oculto para verificar sin mostrar nada al usuario
+let silentFrame=null;
+function getSilentFrame(){
+  if(!silentFrame){
+    silentFrame=document.createElement('iframe');
+    silentFrame.style.cssText='position:fixed;width:1px;height:1px;left:-9999px;top:-9999px;opacity:0;pointer-events:none;';
+    silentFrame.allow='autoplay';
+    document.body.appendChild(silentFrame);
+  }
+  return silentFrame;
+}
+
+// Verifica si un video se puede embeber — silenciosamente
+function canEmbed(videoId){
+  return new Promise(resolve=>{
+    const f=getSilentFrame();
+    let done=false;
+    const finish=(ok)=>{
+      if(done)return; done=true;
+      clearTimeout(t);
+      window.removeEventListener('message',h);
+      resolve(ok);
+    };
+    // Timeout de 4s — si no responde asumimos OK
+    const t=setTimeout(()=>finish(true),4000);
+    const h=(e)=>{
+      try{
+        const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
+        if(d?.event==='onError'||(typeof d?.info==='number'&&d.info>=100&&d.info<=151)){
+          finish(false);
+        }
+        if(d?.event==='onReady'||d?.event==='onStateChange'){
+          finish(true);
+        }
+      }catch(ex){}
+    };
+    window.addEventListener('message',h);
+    f.src=`https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  });
+}
 
 async function playVideo(videoIds,title,artist){
   if(!Array.isArray(videoIds))videoIds=[videoIds];
-  currentVideoIds=videoIds;
   currentTitle=title;
   currentArtist=artist;
-  currentIdIndex=0;
-  tryNextVideo();
-}
 
-function tryNextVideo(){
-  clearTimeout(videoCheckTimer);
-  if(currentIdIndex>=currentVideoIds.length){
-    log('Todos los videos bloqueados — volviendo a escuchar','warn');
-    // ★ Volver a pantalla negra de escucha, no pantalla gris
+  log(`Verificando ${videoIds.length} videos en silencio...`);
+
+  // ★ Verificar TODOS en silencio antes de mostrar cualquiera
+  let validId=null;
+  for(const vid of videoIds){
+    log(`  Probando: ${vid}`);
+    const ok=await canEmbed(vid);
+    if(ok){validId=vid;log(`  ✓ OK: ${vid}`);break;}
+    else log(`  ✗ Bloqueado: ${vid}`);
+  }
+
+  // Limpiar iframe silencioso
+  if(silentFrame)silentFrame.src='about:blank';
+
+  if(!validId){
+    log('Sin video disponible — pantalla de escucha','warn');
     document.getElementById('video-layer').classList.remove('playing');
     document.getElementById('yt-player').src='about:blank';
     isVideoPlaying=false;
     showScreen('listen');
-    startCycle();
     return;
   }
 
-  const videoId=currentVideoIds[currentIdIndex];
-  log(`Cargando video ${currentIdIndex+1}/${currentVideoIds.length}: ${videoId}`);
-
+  // ★ Solo ahora mostramos el video — ya sabemos que funciona
   const frame=document.getElementById('yt-player');
-  frame.src=`https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&playsinline=1`;
+  frame.src=`https://www.youtube.com/embed/${validId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&playsinline=1`;
 
-  // Mostrar video layer inmediatamente
   document.getElementById('video-layer').classList.add('playing');
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-
-  // ★ Si en 5 segundos el iframe sigue mostrando error → siguiente video
-  videoCheckTimer=setTimeout(()=>{
-    // Verificar si el iframe tiene contenido visible
-    // Si no hay respuesta del iframe en 5s lo consideramos bloqueado
-    log('Timeout — probando siguiente video');
-    currentIdIndex++;
-    tryNextVideo();
-  },5000);
-
-  // Escuchar mensajes del iframe
-  const handler=(e)=>{
-    try{
-      const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
-      if(d?.event==='onReady'||d?.event==='onStateChange'){
-        // Video cargó correctamente
-        if(d?.event==='onReady'||(d?.event==='onStateChange'&&d?.info===1)){
-          clearTimeout(videoCheckTimer);
-          window.removeEventListener('message',handler);
-          onVideoLoaded();
-        }
-      }
-      if(d?.event==='onError'){
-        clearTimeout(videoCheckTimer);
-        window.removeEventListener('message',handler);
-        log(`Error ${d?.info} — siguiente video`,'warn');
-        currentIdIndex++;
-        tryNextVideo();
-      }
-    }catch(ex){}
-  };
-  window.addEventListener('message',handler);
-  setTimeout(()=>window.removeEventListener('message',handler),8000);
-}
-
-function onVideoLoaded(){
   isVideoPlaying=true;
-  const title=currentTitle;
-  const artist=currentArtist;
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
 
   document.getElementById('last-song-title').textContent=`${artist} — ${title}`;
   document.getElementById('last-song').style.display='block';
