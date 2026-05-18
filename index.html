@@ -328,22 +328,29 @@ async function recordAndRecognize(){
 
 // ── YOUTUBE SEARCH — prioriza canales oficiales ──
 async function searchYT(title,artist){
-  // ★ Búsqueda 1: título exacto entre comillas — máxima precisión
-  const q1=encodeURIComponent(`"${title}" ${artist}`);
-  // Búsqueda 2: artista + título oficial
-  const q2=encodeURIComponent(`${artist} ${title} official`);
-  // Búsqueda 3: VEVO específico
-  const q3=encodeURIComponent(`${artist}VEVO "${title}"`);
+  const base=`https://www.googleapis.com/youtube/v3/search?type=video&key=${CFG.ytKey}`;
 
-  const base=`https://www.googleapis.com/youtube/v3/search?type=video&videoCategoryId=10&key=${CFG.ytKey}`;
+  // ★ Paso 1: buscar el canal oficial del artista
+  const channelId = await findArtistChannel(artist);
+  log(`Canal del artista: ${channelId||'no encontrado'}`);
 
-  const [r1,r2,r3]=await Promise.all([
-    fetch(`${base}&part=snippet&q=${q1}&maxResults=5&order=relevance`).then(r=>r.json()),
+  const q1=encodeURIComponent(`${artist} ${title} official`);
+  const q2=encodeURIComponent(`${title} ${artist}`);
+
+  const searches = [
+    fetch(`${base}&part=snippet&q=${q1}&maxResults=8&order=relevance`).then(r=>r.json()),
     fetch(`${base}&part=snippet&q=${q2}&maxResults=5&order=relevance`).then(r=>r.json()),
-    fetch(`${base}&part=snippet&q=${q3}&maxResults=3&order=relevance`).then(r=>r.json()),
-  ]);
+  ];
 
-  const items=[...(r1.items||[]),...(r2.items||[]),...(r3.items||[])];
+  // ★ Si encontramos el canal oficial, buscar dentro de él primero
+  if(channelId){
+    searches.unshift(
+      fetch(`${base}&part=snippet&q=${encodeURIComponent(title)}&channelId=${channelId}&maxResults=5&order=relevance`).then(r=>r.json())
+    );
+  }
+
+  const results = await Promise.all(searches);
+  const items = results.flatMap(r=>r.items||[]);
   if(!items.length){log('0 resultados YouTube');return null;}
 
   // Deduplicar
@@ -359,40 +366,62 @@ async function searchYT(title,artist){
     id:i.id.videoId,
     title:i.snippet.title,
     ch:i.snippet.channelTitle,
-    s:scoreVid(i.snippet.title,i.snippet.channelTitle,title,artist)
+    channelId:i.snippet.channelId,
+    s:scoreVid(i.snippet.title,i.snippet.channelTitle,title,artist,channelId,i.snippet.channelId)
   })).sort((a,b)=>b.s-a.s);
 
-  scored.slice(0,3).forEach(v=>log(`  [${v.s}] ${v.ch} — ${v.title.substring(0,40)}`));
+  scored.slice(0,4).forEach(v=>log(`  [${v.s}] ${v.ch} — ${v.title.substring(0,45)}`));
   return scored.slice(0,6).map(i=>i.id);
 }
 
-function scoreVid(snippetTitle,channelTitle,title,artist){
+// Buscar el canal oficial del artista en YouTube
+async function findArtistChannel(artist){
+  try{
+    const q=encodeURIComponent(`${artist} official`);
+    const res=await fetch(`https://www.googleapis.com/youtube/v3/search?type=channel&part=snippet&q=${q}&maxResults=5&key=${CFG.ytKey}`);
+    const data=await res.json();
+    if(!data.items?.length)return null;
+    // Buscar canal que coincida mejor con el artista
+    const a=artist.toLowerCase();
+    for(const item of data.items){
+      const ch=item.snippet.title.toLowerCase();
+      if(ch===a||ch===a+'vevo'||ch.includes(a)&&(ch.includes('vevo')||ch.includes('official'))){
+        return item.id.channelId;
+      }
+    }
+    // Si no encontramos match exacto usar el primero
+    return data.items[0].id.channelId;
+  }catch(e){return null;}
+}
+
+function scoreVid(snippetTitle,channelTitle,title,artist,officialChannelId,videoChannelId){
   const st=snippetTitle.toLowerCase();
   const ch=channelTitle.toLowerCase();
   const t=title.toLowerCase();
   const a=artist.toLowerCase();
   let p=0;
 
-  // ★ DESCALIFICACIÓN INMEDIATA — canales de compilación/spam
-  const spamChannels=['viral','hits','sounds','mix','playlist','top','best of','shorts','tiktok','reels','musicflix','musicfix','tema','recopilacion'];
+  // ★ DESCALIFICACIÓN INMEDIATA — canales spam
+  const spamChannels=['viral','sounds','mix','playlist','best of','shorts','tiktok','reels','musicflix','musicfix','recopilacion'];
   if(spamChannels.some(s=>ch.includes(s))) return -999;
-
-  // ★ DESCALIFICACIÓN INMEDIATA — títulos de compilación
   const spamTitles=['best of','viral hits','top songs','playlist','compilation','#short','shorts'];
   if(spamTitles.some(s=>st.includes(s))) return -999;
 
-  // ★ Título exacto completo
-  if(st.includes(t))                          p+=15;
+  // ★ MÁXIMA PRIORIDAD: video del canal oficial del artista
+  if(officialChannelId && videoChannelId === officialChannelId) p+=20;
+
+  // ★ Título exacto
+  if(st.includes(t))       p+=15;
   else{
-    const titleWords=t.split(/\s+/).filter(w=>w.length>2);
-    const matched=titleWords.filter(w=>st.includes(w));
-    const ratio=matched.length/titleWords.length;
+    const words=t.split(/\s+/).filter(w=>w.length>2);
+    const matched=words.filter(w=>st.includes(w));
+    const ratio=matched.length/words.length;
     if(ratio>=0.8)      p+=8;
     else if(ratio>=0.5) p+=2;
     else                p-=15;
   }
 
-  // ★ Canales oficiales
+  // Canales oficiales
   if(ch.includes('vevo'))                     p+=10;
   if(ch.includes(a)&&ch.includes('vevo'))     p+=10;
   if(ch===a||ch===a+' vevo')                  p+=8;
@@ -403,21 +432,21 @@ function scoreVid(snippetTitle,channelTitle,title,artist){
   // Artista en título
   if(st.includes(a))                          p+=4;
 
-  // Palabras clave oficiales
+  // Palabras clave
   if(st.includes('official music video'))     p+=5;
   if(st.includes('official video'))           p+=4;
   if(st.includes('official'))                 p+=2;
   if(st.includes('vevo'))                     p+=3;
 
   // Penalizaciones
-  if(st.includes('cover'))                    p-=10;
-  if(st.includes('karaoke'))                  p-=10;
-  if(st.includes('reaction'))                 p-=10;
+  if(st.includes('cover'))    p-=10;
+  if(st.includes('karaoke'))  p-=10;
+  if(st.includes('reaction')) p-=10;
   if(st.includes('lyrics')&&!st.includes('official')) p-=3;
   if(st.includes('remix')&&!ch.includes(a))  p-=5;
   if(st.includes('live')&&!st.includes('official'))   p-=4;
-  if(st.includes('tik tok')||st.includes('tiktok'))   p-=8;
-  if(st.includes('viral'))                    p-=6;
+  if(st.includes('tiktok')||st.includes('tik tok'))   p-=8;
+  if(st.includes('viral'))    p-=6;
 
   return p;
 }
