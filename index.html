@@ -328,16 +328,17 @@ async function recordAndRecognize(){
 
 // ── YOUTUBE SEARCH — prioriza canales oficiales ──
 async function searchYT(title,artist){
-  const q1=encodeURIComponent(`${artist} ${title} official music video`);
-  const q2=encodeURIComponent(`${artist}VEVO ${title}`);
-  const q3=encodeURIComponent(`${artist} ${title} official`);
+  // Usar título completo para máxima precisión
+  const fullQ=encodeURIComponent(`${artist} ${title}`);
+  const officialQ=encodeURIComponent(`${artist} ${title} official`);
+  const vevoQ=encodeURIComponent(`${artist}VEVO ${title}`);
 
   const base=`https://www.googleapis.com/youtube/v3/search?type=video&videoCategoryId=10&key=${CFG.ytKey}`;
 
   const [r1,r2,r3]=await Promise.all([
-    fetch(`${base}&part=snippet&q=${q1}&maxResults=5&order=relevance`).then(r=>r.json()),
-    fetch(`${base}&part=snippet&q=${q2}&maxResults=5&order=viewCount`).then(r=>r.json()),
-    fetch(`${base}&part=snippet&q=${q3}&maxResults=5&order=viewCount`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${fullQ}&maxResults=5&order=relevance`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${officialQ}&maxResults=5&order=viewCount`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${vevoQ}&maxResults=3&order=relevance`).then(r=>r.json()),
   ]);
 
   const items=[...(r1.items||[]),...(r2.items||[]),...(r3.items||[])];
@@ -368,7 +369,12 @@ function scoreVid(snippetTitle,channelTitle,title,artist){
   const a=artist.toLowerCase();
   let p=0;
 
-  // ★ Canales oficiales — máxima prioridad
+  // ★ Coincidencia exacta del título completo — máxima prioridad
+  if(st.includes(t))                         p+=8;
+  // Penalizar fuerte si el título NO está en el resultado
+  else                                        p-=6;
+
+  // ★ Canales oficiales
   if(ch.includes('vevo'))                    p+=10;
   if(ch===a||ch===a+' vevo')                 p+=8;
   if(ch.includes(a)&&ch.includes('vevo'))    p+=10;
@@ -377,9 +383,10 @@ function scoreVid(snippetTitle,channelTitle,title,artist){
   if(ch.includes('records'))                 p+=2;
   if(ch.includes('music'))                   p+=1;
 
-  // Título del video
-  if(st.includes(t))                         p+=4;
+  // Artista en título
   if(st.includes(a))                         p+=4;
+
+  // Palabras clave oficiales
   if(st.includes('official music video'))    p+=5;
   if(st.includes('official video'))          p+=4;
   if(st.includes('official'))                p+=2;
