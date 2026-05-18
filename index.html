@@ -369,40 +369,45 @@ function scoreVid(snippetTitle,channelTitle,title,artist){
   const a=artist.toLowerCase();
   let p=0;
 
-  // ★ Coincidencia exacta del título completo — máxima prioridad
-  if(st.includes(t))                         p+=8;
-  // Penalizar fuerte si el título NO está en el resultado
-  else                                        p-=6;
+  // ★ MÁXIMA PRIORIDAD: título exacto completo en el video
+  if(st.includes(t))                          p+=15;
+  else {
+    // Verificar palabras clave del título — especialmente números de volumen
+    const titleWords=t.split(/\s+/).filter(w=>w.length>2);
+    const matchedWords=titleWords.filter(w=>st.includes(w));
+    const matchRatio=matchedWords.length/titleWords.length;
+    if(matchRatio>=0.8)      p+=8;
+    else if(matchRatio>=0.5) p+=2;
+    else                     p-=10; // Título muy diferente — penalizar fuerte
+  }
 
   // ★ Canales oficiales
-  if(ch.includes('vevo'))                    p+=10;
-  if(ch===a||ch===a+' vevo')                 p+=8;
-  if(ch.includes(a)&&ch.includes('vevo'))    p+=10;
-  if(ch.includes(a)&&ch.includes('official'))p+=6;
-  if(ch.includes(a))                         p+=4;
-  if(ch.includes('records'))                 p+=2;
-  if(ch.includes('music'))                   p+=1;
+  if(ch.includes('vevo'))                     p+=10;
+  if(ch.includes(a)&&ch.includes('vevo'))     p+=10;
+  if(ch===a||ch===a+' vevo')                  p+=8;
+  if(ch.includes(a)&&ch.includes('official')) p+=6;
+  if(ch.includes(a))                          p+=4;
+  if(ch.includes('records'))                  p+=2;
 
   // Artista en título
-  if(st.includes(a))                         p+=4;
+  if(st.includes(a))                          p+=4;
 
   // Palabras clave oficiales
-  if(st.includes('official music video'))    p+=5;
-  if(st.includes('official video'))          p+=4;
-  if(st.includes('official'))                p+=2;
-  if(st.includes('vevo'))                    p+=3;
+  if(st.includes('official music video'))     p+=5;
+  if(st.includes('official video'))           p+=4;
+  if(st.includes('official'))                 p+=2;
+  if(st.includes('vevo'))                     p+=3;
 
-  // ★ Penalizaciones fuertes
-  if(st.includes('cover'))                   p-=10;
-  if(st.includes('karaoke'))                 p-=10;
-  if(st.includes('reaction'))                p-=10;
-  if(st.includes('tutorial'))                p-=10;
-  if(st.includes('how to'))                  p-=10;
-  if(st.includes('lyrics')&&!st.includes('official'))p-=3;
-  if(st.includes('remix')&&!ch.includes(a)) p-=5;
-  if(st.includes('live')&&!st.includes('official'))  p-=4;
-  if(st.includes('tik tok')||st.includes('tiktok'))  p-=8;
-  if(st.includes('viral'))                   p-=6;
+  // ★ Penalizaciones
+  if(st.includes('cover'))                    p-=10;
+  if(st.includes('karaoke'))                  p-=10;
+  if(st.includes('reaction'))                 p-=10;
+  if(st.includes('tutorial'))                 p-=10;
+  if(st.includes('lyrics')&&!st.includes('official')) p-=3;
+  if(st.includes('remix')&&!ch.includes(a))  p-=5;
+  if(st.includes('live')&&!st.includes('official'))   p-=4;
+  if(st.includes('tik tok')||st.includes('tiktok'))   p-=8;
+  if(st.includes('viral'))                    p-=6;
 
   return p;
 }
