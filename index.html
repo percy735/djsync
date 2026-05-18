@@ -234,8 +234,15 @@ async function doScan(){
       const result=await recordAndRecognize();
       title=result.title;
       artist=result.artist;
-      ytId=result.ytVideoId?[result.ytVideoId]:null;
-      log(`ACRCloud: "${title}" — ${artist} | YT ID: ${result.ytVideoId||'ninguno'}`,'ok');
+      // ★ Verificar correcciones antes de usar el ID de ACRCloud
+      const corrKey=title.toLowerCase().trim();
+      if(VIDEO_CORRECTIONS[corrKey]){
+        log(`✓ Corrección aplicada para: ${title}`,'ok');
+        ytId=[VIDEO_CORRECTIONS[corrKey]];
+      } else {
+        ytId=result.ytVideoId?[result.ytVideoId]:null;
+      }
+      log(`ACRCloud: "${title}" — ${artist} | YT ID: ${ytId?.[0]||'ninguno'}`,'ok');
     }else{
       // Demo mode
       const demos=[{title:'Blinding Lights',artist:'The Weeknd'},{title:'Flowers',artist:'Miley Cyrus'},{title:'Levitating',artist:'Dua Lipa'}];
