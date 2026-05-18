@@ -327,10 +327,23 @@ async function recordAndRecognize(){
 }
 
 // ── YOUTUBE SEARCH — prioriza canales oficiales ──
+// ★ Correcciones manuales para videos que YouTube confunde frecuentemente
+const VIDEO_CORRECTIONS = {
+  'shakira: bzrp music sessions, vol. 53': 'CocEMWdc7Ck',
+  'shakira bzrp music sessions vol. 53': 'CocEMWdc7Ck',
+  'bzrp music sessions vol. 53': 'CocEMWdc7Ck',
+};
+
 async function searchYT(title,artist){
+  // ★ Verificar correcciones conocidas primero
+  const key = `${title}`.toLowerCase().trim();
+  if(VIDEO_CORRECTIONS[key]){
+    log(`✓ Corrección conocida: ${VIDEO_CORRECTIONS[key]}`);
+    return [VIDEO_CORRECTIONS[key]];
+  }
+
   const base=`https://www.googleapis.com/youtube/v3/search?type=video&key=${CFG.ytKey}`;
 
-  // ★ Paso 1: buscar el canal oficial del artista
   const channelId = await findArtistChannel(artist);
   log(`Canal del artista: ${channelId||'no encontrado'}`);
 
@@ -342,7 +355,6 @@ async function searchYT(title,artist){
     fetch(`${base}&part=snippet&q=${q2}&maxResults=5&order=relevance`).then(r=>r.json()),
   ];
 
-  // ★ Si encontramos el canal oficial, buscar dentro de él primero
   if(channelId){
     searches.unshift(
       fetch(`${base}&part=snippet&q=${encodeURIComponent(title)}&channelId=${channelId}&maxResults=5&order=relevance`).then(r=>r.json())
@@ -353,7 +365,6 @@ async function searchYT(title,artist){
   const items = results.flatMap(r=>r.items||[]);
   if(!items.length){log('0 resultados YouTube');return null;}
 
-  // Deduplicar
   const seen=new Set();
   const unique=items.filter(i=>{
     if(seen.has(i.id.videoId))return false;
@@ -401,9 +412,11 @@ function scoreVid(snippetTitle,channelTitle,title,artist,officialChannelId,video
   const a=artist.toLowerCase();
   let p=0;
 
-  // ★ DESCALIFICACIÓN INMEDIATA — canales spam
-  const spamChannels=['viral','sounds','mix','playlist','best of','shorts','tiktok','reels','musicflix','musicfix','recopilacion'];
+  // ★ DESCALIFICACIÓN — canales auto-generados por YouTube y spam
+  const spamChannels=['viral','sounds','mix','playlist','best of','shorts','tiktok','reels','musicflix','musicfix','recopilacion','- tema','auto-generated'];
   if(spamChannels.some(s=>ch.includes(s))) return -999;
+  // Canales con formato "Artista - Tema" son auto-generados
+  if(ch.match(/^.+\s-\s.+$/)) return -999;
   const spamTitles=['best of','viral hits','top songs','playlist','compilation','#short','shorts'];
   if(spamTitles.some(s=>st.includes(s))) return -999;
 
