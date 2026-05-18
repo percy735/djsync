@@ -326,21 +326,24 @@ async function recordAndRecognize(){
   throw new Error('ACRCloud: '+data.status?.msg);
 }
 
-// ── YOUTUBE SEARCH ──
+// ── YOUTUBE SEARCH — prioriza canales oficiales ──
 async function searchYT(title,artist){
-  // Search 1: buscar en canal VEVO del artista (más oficial)
-  const q1=encodeURIComponent(`${artist} ${title} official video`);
-  const q2=encodeURIComponent(`${artist} ${title} vevo`);
+  const q1=encodeURIComponent(`${artist} ${title} official music video`);
+  const q2=encodeURIComponent(`${artist}VEVO ${title}`);
+  const q3=encodeURIComponent(`${artist} ${title} official`);
 
-  const [res1,res2]=await Promise.all([
-    fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q1}&type=video&videoCategoryId=10&maxResults=5&key=${CFG.ytKey}`).then(r=>r.json()),
-    fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q2}&type=video&videoCategoryId=10&maxResults=5&key=${CFG.ytKey}`).then(r=>r.json()),
+  const base=`https://www.googleapis.com/youtube/v3/search?type=video&videoCategoryId=10&key=${CFG.ytKey}`;
+
+  const [r1,r2,r3]=await Promise.all([
+    fetch(`${base}&part=snippet&q=${q1}&maxResults=5&order=relevance`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${q2}&maxResults=5&order=viewCount`).then(r=>r.json()),
+    fetch(`${base}&part=snippet&q=${q3}&maxResults=5&order=viewCount`).then(r=>r.json()),
   ]);
 
-  const items=[...(res1.items||[]),...(res2.items||[])];
+  const items=[...(r1.items||[]),...(r2.items||[]),...(r3.items||[])];
   if(!items.length){log('0 resultados YouTube');return null;}
 
-  // Deduplicar por videoId
+  // Deduplicar
   const seen=new Set();
   const unique=items.filter(i=>{
     if(seen.has(i.id.videoId))return false;
@@ -351,129 +354,132 @@ async function searchYT(title,artist){
 
   const scored=unique.map(i=>({
     id:i.id.videoId,
-    s:scoreVid(i.snippet.title, i.snippet.channelTitle, title, artist)
+    s:scoreVid(i.snippet.title,i.snippet.channelTitle,title,artist)
   })).sort((a,b)=>b.s-a.s);
 
-  log(`Mejor: ${scored[0]?.id} (score ${scored[0]?.s})`);
-  return scored.slice(0,5).map(i=>i.id);
+  log(`Mejor: score ${scored[0]?.s} — ${scored[0]?.id}`);
+  return scored.slice(0,6).map(i=>i.id);
 }
 
-function scoreVid(snippetTitle, channelTitle, title, artist){
-  const s=(snippetTitle+' '+channelTitle).toLowerCase();
+function scoreVid(snippetTitle,channelTitle,title,artist){
+  const st=snippetTitle.toLowerCase();
+  const ch=channelTitle.toLowerCase();
   const t=title.toLowerCase();
   const a=artist.toLowerCase();
   let p=0;
 
-  // Título y artista en el snippet
-  if(s.includes(t))p+=4;
-  if(s.includes(a))p+=4;
+  // ★ Canales oficiales — máxima prioridad
+  if(ch.includes('vevo'))                    p+=10;
+  if(ch===a||ch===a+' vevo')                 p+=8;
+  if(ch.includes(a)&&ch.includes('vevo'))    p+=10;
+  if(ch.includes(a)&&ch.includes('official'))p+=6;
+  if(ch.includes(a))                         p+=4;
+  if(ch.includes('records'))                 p+=2;
+  if(ch.includes('music'))                   p+=1;
 
-  // Canales oficiales
-  if(channelTitle.toLowerCase().includes('vevo'))p+=5;
-  if(channelTitle.toLowerCase().includes(a))p+=3;
-  if(s.includes('official video'))p+=3;
-  if(s.includes('official music video'))p+=4;
-  if(s.includes('official'))p+=2;
-  if(s.includes('vevo'))p+=3;
+  // Título del video
+  if(st.includes(t))                         p+=4;
+  if(st.includes(a))                         p+=4;
+  if(st.includes('official music video'))    p+=5;
+  if(st.includes('official video'))          p+=4;
+  if(st.includes('official'))                p+=2;
+  if(st.includes('vevo'))                    p+=3;
 
-  // Penalizaciones — videos incorrectos
-  if(s.includes('lyrics'))p-=2;
-  if(s.includes('lyric'))p-=2;
-  if(s.includes('cover'))p-=5;
-  if(s.includes('karaoke'))p-=8;
-  if(s.includes('remix')&&!s.includes('official'))p-=3;
-  if(s.includes('reaction'))p-=8;
-  if(s.includes('live')&&!s.includes('official'))p-=3;
-  if(s.includes('tutorial'))p-=8;
-  if(s.includes('how to'))p-=8;
+  // ★ Penalizaciones fuertes
+  if(st.includes('cover'))                   p-=10;
+  if(st.includes('karaoke'))                 p-=10;
+  if(st.includes('reaction'))                p-=10;
+  if(st.includes('tutorial'))                p-=10;
+  if(st.includes('how to'))                  p-=10;
+  if(st.includes('lyrics')&&!st.includes('official'))p-=3;
+  if(st.includes('remix')&&!ch.includes(a)) p-=5;
+  if(st.includes('live')&&!st.includes('official'))  p-=4;
+  if(st.includes('tik tok')||st.includes('tiktok'))  p-=8;
+  if(st.includes('viral'))                   p-=6;
 
   return p;
 }
 
 // ── CHECK EMBEDDABLE ──
-// ── TEST VIDEO IN HIDDEN IFRAME ──
-let testFrame=null;
-function getTestFrame(){
-  if(!testFrame){
-    testFrame=document.createElement('iframe');
-    testFrame.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;';
-    testFrame.allow='autoplay';
-    document.body.appendChild(testFrame);
-  }
-  return testFrame;
-}
+// ── PLAY VIDEO con fallback automático ──
+let currentVideoIds=[];
+let currentTitle='';
+let currentArtist='';
+let currentIdIndex=0;
+let videoCheckTimer=null;
 
-function checkEmbeddable(videoId){
-  return new Promise(resolve=>{
-    const f=getTestFrame();
-    let resolved=false;
-    const done=(val)=>{
-      if(resolved)return;
-      resolved=true;
-      clearTimeout(timer);
-      window.removeEventListener('message',handler);
-      resolve(val);
-    };
-    // If no error message in 3s → assume OK
-    const timer=setTimeout(()=>done(true),3000);
-    const handler=(e)=>{
-      try{
-        const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
-        // YouTube error codes 100-150 = video unavailable/blocked
-        if(d?.event==='onError'||(typeof d?.info==='number'&&d.info>=100&&d.info<=150)){
-          done(false);
-        }
-      }catch(ex){}
-    };
-    window.addEventListener('message',handler);
-    f.src=`https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
-  });
-}
-
-// ── PLAY VIDEO ──
 async function playVideo(videoIds,title,artist){
   if(!Array.isArray(videoIds))videoIds=[videoIds];
-  let validId=null;
-  for(const vid of videoIds){
-    log('Probando: '+vid);
-    const ok=await checkEmbeddable(vid);
-    if(ok){validId=vid;log('✓ OK: '+vid);break;}
-    else log('✗ Bloqueado: '+vid);
-  }
+  currentVideoIds=videoIds;
+  currentTitle=title;
+  currentArtist=artist;
+  currentIdIndex=0;
+  tryNextVideo();
+}
 
-  if(testFrame)testFrame.src='about:blank';
-
-  if(!validId){
-    log('Ningún video disponible — manteniendo actual','warn');
+function tryNextVideo(){
+  clearTimeout(videoCheckTimer);
+  if(currentIdIndex>=currentVideoIds.length){
+    log('Todos los videos bloqueados — pantalla anterior','warn');
+    // Si había video anterior lo mantenemos, si no volvemos a listen
+    if(!isVideoPlaying){
+      showScreen('listen');
+      startCycle();
+    }
     return;
   }
 
-  const frame=document.getElementById('yt-player');
-  frame.src=`https://www.youtube.com/embed/${validId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  const videoId=currentVideoIds[currentIdIndex];
+  log(`Cargando video ${currentIdIndex+1}/${currentVideoIds.length}: ${videoId}`);
 
-  // Watch for errors on main player — auto skip if blocked after load
-  const remaining=videoIds.slice(videoIds.indexOf(validId)+1);
-  if(remaining.length>0){
-    const errHandler=(e)=>{
-      try{
-        const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
-        if(d?.event==='onError'||(typeof d?.info==='number'&&d.info>=100&&d.info<=150)){
-          window.removeEventListener('message',errHandler);
-          log('Error en reproducción — intentando siguiente','warn');
-          playVideo(remaining,title,artist);
+  const frame=document.getElementById('yt-player');
+  frame.src=`https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&playsinline=1`;
+
+  // Mostrar video layer inmediatamente
+  document.getElementById('video-layer').classList.add('playing');
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+
+  // ★ Si en 5 segundos el iframe sigue mostrando error → siguiente video
+  videoCheckTimer=setTimeout(()=>{
+    // Verificar si el iframe tiene contenido visible
+    // Si no hay respuesta del iframe en 5s lo consideramos bloqueado
+    log('Timeout — probando siguiente video');
+    currentIdIndex++;
+    tryNextVideo();
+  },5000);
+
+  // Escuchar mensajes del iframe
+  const handler=(e)=>{
+    try{
+      const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
+      if(d?.event==='onReady'||d?.event==='onStateChange'){
+        // Video cargó correctamente
+        if(d?.event==='onReady'||(d?.event==='onStateChange'&&d?.info===1)){
+          clearTimeout(videoCheckTimer);
+          window.removeEventListener('message',handler);
+          onVideoLoaded();
         }
-      }catch(ex){}
-    };
-    window.addEventListener('message',errHandler);
-    setTimeout(()=>window.removeEventListener('message',errHandler),15000);
-  }
+      }
+      if(d?.event==='onError'){
+        clearTimeout(videoCheckTimer);
+        window.removeEventListener('message',handler);
+        log(`Error ${d?.info} — siguiente video`,'warn');
+        currentIdIndex++;
+        tryNextVideo();
+      }
+    }catch(ex){}
+  };
+  window.addEventListener('message',handler);
+  setTimeout(()=>window.removeEventListener('message',handler),8000);
+}
+
+function onVideoLoaded(){
+  isVideoPlaying=true;
+  const title=currentTitle;
+  const artist=currentArtist;
 
   document.getElementById('last-song-title').textContent=`${artist} — ${title}`;
   document.getElementById('last-song').style.display='block';
-  document.getElementById('video-layer').classList.add('playing');
-  isVideoPlaying=true;
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-
   document.getElementById('vhud-title').textContent=title;
   document.getElementById('vhud-artist').textContent=artist;
 
