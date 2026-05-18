@@ -102,7 +102,7 @@ html,body{width:100%;height:100%;background:#000;color:#e0e0f0;font-family:'DM M
 <!-- SETUP -->
 <div id="screen-setup" class="screen active">
   <div class="logo">DJ SYNC</div>
-  <div class="logo-sub">VISUALES AUTOMÁTICOS PARA BARES · v3.0</div>
+  <div class="logo-sub">VISUALES AUTOMÁTICOS PARA BARES · v3.2</div>
   <div class="card">
     <div class="card-title">⚙ Configuración</div>
     <div class="field">
@@ -122,7 +122,7 @@ html,body{width:100%;height:100%;background:#000;color:#e0e0f0;font-family:'DM M
 
 <!-- LISTEN -->
 <div id="screen-listen" class="screen">
-  <button class="settings-btn" onclick="showScreen('setup')">⚙ v3.0</button>
+  <button class="settings-btn" onclick="showScreen('setup')">⚙ v3.2</button>
   <div class="listen-logo">DJ SYNC</div>
   <div class="bars" id="bars"></div>
   <div class="listen-status" id="listen-status">ESCUCHANDO AMBIENTE...</div>
@@ -258,7 +258,6 @@ async function doScan(){
     document.getElementById('scan-indicator').classList.remove('show');
     const key=`${artist}__${title}`;
     if(key===lastSong){
-      // ★ Misma canción — no tocar el video, seguir escuchando
       log('Misma canción — video sin cambios');
       isScanning=false;
       startCycle();
@@ -269,10 +268,10 @@ async function doScan(){
     log(`Buscando video: ${artist} - ${title}`);
     if(!ytId)ytId=await searchYT(title,artist);
     if(!ytId||!ytId.length){
-      log('Sin video en YouTube','warn');
+      // ★ Sin video — mantener lo que hay, nunca negro
+      log('Sin video — manteniendo pantalla actual','warn');
       isScanning=false;
-      if(!isVideoPlaying)startCycle();
-      else startCycle();
+      startCycle();
       return;
     }
 
@@ -494,33 +493,16 @@ function getSilentFrame(){
   return silentFrame;
 }
 
-// Verifica si un video se puede embeber — silenciosamente
-function canEmbed(videoId){
-  return new Promise(resolve=>{
-    const f=getSilentFrame();
-    let done=false;
-    const finish=(ok)=>{
-      if(done)return; done=true;
-      clearTimeout(t);
-      window.removeEventListener('message',h);
-      resolve(ok);
-    };
-    // Timeout de 4s — si no responde asumimos OK
-    const t=setTimeout(()=>finish(true),4000);
-    const h=(e)=>{
-      try{
-        const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
-        if(d?.event==='onError'||(typeof d?.info==='number'&&d.info>=100&&d.info<=151)){
-          finish(false);
-        }
-        if(d?.event==='onReady'||d?.event==='onStateChange'){
-          finish(true);
-        }
-      }catch(ex){}
-    };
-    window.addEventListener('message',h);
-    f.src=`https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
-  });
+// Verifica si un video se puede embeber usando oEmbed API
+async function canEmbed(videoId){
+  try{
+    const r=await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+    if(!r.ok)return false;
+    // Verificación extra: pedir detalles del video
+    const data=await r.json();
+    // Si el título existe y tiene thumbnail, el video existe
+    return !!(data.title && data.thumbnail_url);
+  }catch(e){return false;}
 }
 
 async function playVideo(videoIds,title,artist){
@@ -543,17 +525,18 @@ async function playVideo(videoIds,title,artist){
   if(silentFrame)silentFrame.src='about:blank';
 
   if(!validId){
-    log('Sin video disponible — pantalla de escucha','warn');
-    document.getElementById('video-layer').classList.remove('playing');
-    document.getElementById('yt-player').src='about:blank';
-    isVideoPlaying=false;
-    showScreen('listen');
+    log('Sin video disponible — manteniendo pantalla actual','warn');
+    // ★ Si hay video anterior, dejarlo. Si no, volver a escucha.
+    if(!isVideoPlaying){
+      showScreen('listen');
+    }
     return;
   }
 
   // ★ Solo ahora mostramos el video — ya sabemos que funciona
+  // Usamos list=validId para que cuando termine pase al siguiente relacionado
   const frame=document.getElementById('yt-player');
-  frame.src=`https://www.youtube.com/embed/${validId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&playsinline=1`;
+  frame.src=`https://www.youtube.com/embed/${validId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=1&iv_load_policy=3&disablekb=1&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
 
   document.getElementById('video-layer').classList.add('playing');
   isVideoPlaying=true;
@@ -576,6 +559,63 @@ async function playVideo(videoIds,title,artist){
   setTimeout(()=>flash.classList.remove('show'),2500);
 
   log(`▶ ${artist} — ${title}`,'ok');
+
+  // ★ WATCHDOG — si el video termina, buscar otro del mismo artista
+  startVideoWatchdog(validId, artist, title);
+}
+
+// Detecta cuando el video termina y pone otro del mismo artista
+let watchdogTimer=null;
+function startVideoWatchdog(videoId, artist, title){
+  clearInterval(watchdogTimer);
+  // Escuchar mensajes del player principal
+  const handler=(e)=>{
+    try{
+      const d=typeof e.data==='string'?JSON.parse(e.data):e.data;
+      // Estado 0 = video terminado en YouTube IFrame API
+      if(d?.event==='onStateChange'&&d?.info===0){
+        window.removeEventListener('message',handler);
+        clearInterval(watchdogTimer);
+        log('Video terminado — buscando siguiente del mismo artista');
+        playRelated(artist, title);
+      }
+    }catch(ex){}
+  };
+  window.addEventListener('message',handler);
+
+  // Fallback: si tras 10 minutos sigue el mismo video, no hacer nada
+  // YouTube con rel=1 ya pone el siguiente automáticamente
+}
+
+// Reproduce un video relacionado del mismo artista
+async function playRelated(artist, title){
+  if(!isVideoPlaying)return;
+  log(`Buscando otro video de: ${artist}`);
+  try{
+    const q=encodeURIComponent(`${artist} official music video`);
+    const base=`https://www.googleapis.com/youtube/v3/search?type=video&key=${CFG.ytKey}`;
+    const data=await fetch(`${base}&part=snippet&q=${q}&maxResults=10&order=viewCount`).then(r=>r.json());
+    if(!data.items?.length)return;
+
+    // Filtrar la canción actual para no repetir
+    const others=data.items
+      .filter(i=>!i.snippet.title.toLowerCase().includes(title.toLowerCase()))
+      .map(i=>i.id.videoId);
+
+    if(!others.length)return;
+
+    // Verificar y reproducir el primero embebible
+    for(const vid of others.slice(0,5)){
+      const ok=await canEmbed(vid);
+      if(ok){
+        log(`▶ Siguiente: ${vid}`,'ok');
+        const frame=document.getElementById('yt-player');
+        frame.src=`https://www.youtube.com/embed/${vid}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=1&iv_load_policy=3&disablekb=1&playsinline=1`;
+        startVideoWatchdog(vid, artist, title);
+        return;
+      }
+    }
+  }catch(e){log('Error buscando relacionado: '+e.message);}
 }
 
 // Tap to show HUD
