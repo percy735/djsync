@@ -328,32 +328,65 @@ async function recordAndRecognize(){
 
 // ── YOUTUBE SEARCH ──
 async function searchYT(title,artist){
-  const q=encodeURIComponent(`${artist} ${title} official video`);
-  const url=`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q}&type=video&videoCategoryId=10&maxResults=8&key=${CFG.ytKey}`;
-  log('Buscando en YouTube...');
-  const res=await fetch(url);
-  if(!res.ok)throw new Error('YouTube API HTTP '+res.status);
-  const data=await res.json();
-  if(data.error)throw new Error('YouTube: '+data.error.message);
-  if(!data.items?.length){log('0 resultados YouTube');return null;}
-  log(`YouTube: ${data.items.length} resultados`);
-  return data.items
-    .map(i=>({id:i.id.videoId,s:scoreVid(i.snippet.title+' '+i.snippet.channelTitle,title,artist)}))
-    .sort((a,b)=>b.s-a.s)
-    .slice(0,5)
-    .map(i=>i.id);
+  // Search 1: buscar en canal VEVO del artista (más oficial)
+  const q1=encodeURIComponent(`${artist} ${title} official video`);
+  const q2=encodeURIComponent(`${artist} ${title} vevo`);
+
+  const [res1,res2]=await Promise.all([
+    fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q1}&type=video&videoCategoryId=10&maxResults=5&key=${CFG.ytKey}`).then(r=>r.json()),
+    fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q2}&type=video&videoCategoryId=10&maxResults=5&key=${CFG.ytKey}`).then(r=>r.json()),
+  ]);
+
+  const items=[...(res1.items||[]),...(res2.items||[])];
+  if(!items.length){log('0 resultados YouTube');return null;}
+
+  // Deduplicar por videoId
+  const seen=new Set();
+  const unique=items.filter(i=>{
+    if(seen.has(i.id.videoId))return false;
+    seen.add(i.id.videoId);return true;
+  });
+
+  log(`YouTube: ${unique.length} resultados únicos`);
+
+  const scored=unique.map(i=>({
+    id:i.id.videoId,
+    s:scoreVid(i.snippet.title, i.snippet.channelTitle, title, artist)
+  })).sort((a,b)=>b.s-a.s);
+
+  log(`Mejor: ${scored[0]?.id} (score ${scored[0]?.s})`);
+  return scored.slice(0,5).map(i=>i.id);
 }
 
-function scoreVid(txt,title,artist){
-  const s=txt.toLowerCase();let p=0;
-  if(s.includes(title.toLowerCase()))p+=3;
-  if(s.includes(artist.toLowerCase()))p+=3;
+function scoreVid(snippetTitle, channelTitle, title, artist){
+  const s=(snippetTitle+' '+channelTitle).toLowerCase();
+  const t=title.toLowerCase();
+  const a=artist.toLowerCase();
+  let p=0;
+
+  // Título y artista en el snippet
+  if(s.includes(t))p+=4;
+  if(s.includes(a))p+=4;
+
+  // Canales oficiales
+  if(channelTitle.toLowerCase().includes('vevo'))p+=5;
+  if(channelTitle.toLowerCase().includes(a))p+=3;
+  if(s.includes('official video'))p+=3;
+  if(s.includes('official music video'))p+=4;
   if(s.includes('official'))p+=2;
-  if(s.includes('vevo'))p+=2;
-  if(s.includes('video'))p+=1;
-  if(s.includes('lyrics'))p-=1;
-  if(s.includes('cover'))p-=2;
-  if(s.includes('karaoke'))p-=3;
+  if(s.includes('vevo'))p+=3;
+
+  // Penalizaciones — videos incorrectos
+  if(s.includes('lyrics'))p-=2;
+  if(s.includes('lyric'))p-=2;
+  if(s.includes('cover'))p-=5;
+  if(s.includes('karaoke'))p-=8;
+  if(s.includes('remix')&&!s.includes('official'))p-=3;
+  if(s.includes('reaction'))p-=8;
+  if(s.includes('live')&&!s.includes('official'))p-=3;
+  if(s.includes('tutorial'))p-=8;
+  if(s.includes('how to'))p-=8;
+
   return p;
 }
 
